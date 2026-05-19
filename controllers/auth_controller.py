@@ -1,74 +1,91 @@
 import hashlib
-from models.user_model import (
-    get_user_by_username, create_user, update_last_login
-)
-from utils.validators import validate_user
-
-# Simple in-memory session (replace with proper session handling if needed)
-_current_user = None
+from database.db_connection import get_connection, close_connection
 
 
-def _hash_password(password):
-    return hashlib.sha256(password.encode()).hexdigest()
+class AuthController:
 
+    # ── LOGIN ─────────────────────────────────────────────────
+    @staticmethod
+    def login(username: str, password: str) -> dict:
+        conn = get_connection()
+        if not conn:
+            return {"error": "Database connection failed."}
+        cursor = conn.cursor(dictionary=True)
+        try:
+            cursor.execute(
+                "SELECT id, username, password_hash, full_name FROM user WHERE username = %s",
+                (username,)
+            )
+            user = cursor.fetchone()
+            if not user:
+                return {"error": "Invalid username or password."}
 
-def login(username, password):
-    """
-    Authenticate a user.
-    Returns (True, user_dict) or (False, error_message).
-    """
-    global _current_user
+            hashed = AuthController._hash_password(password)
+            if user["password_hash"] != hashed:
+                return {"error": "Invalid username or password."}
 
-    valid, error = validate_user({'username': username, 'password': password})
-    if not valid:
-        return False, error
+            # Update last_login
+            cursor.execute(
+                "UPDATE user SET last_login = CURRENT_TIMESTAMP WHERE id = %s",
+                (user["id"],)
+            )
+            conn.commit()
 
-    user = get_user_by_username(username)
-    if not user:
-        return False, "Invalid username or password."
+            return {
+                "success":   True,
+                "user_id":   user["id"],
+                "username":  user["username"],
+                "full_name": user["full_name"],
+            }
+        except Exception as e:
+            print(f"[AuthController] login error: {e}")
+            return {"error": str(e)}
+        finally:
+            close_connection(conn, cursor)
 
-    if user['password_hash'] != _hash_password(password):
-        return False, "Invalid username or password."
+    # ── REGISTER ──────────────────────────────────────────────
+    @staticmethod
+    def register(full_name: str, username: str, email: str, password: str) -> dict:
+        if len(username) < 3:
+            return {"error": "Username must be at least 3 characters."}
+        if len(password) < 4:
+            return {"error": "Password must be at least 4 characters."}
+        if "@" not in email:
+            return {"error": "Please enter a valid email."}
 
-    update_last_login(user['id'])
-    _current_user = user
-    return True, user
+        conn = get_connection()
+        if not conn:
+            return {"error": "Database connection failed."}
+        cursor = conn.cursor(dictionary=True)
+        try:
+            # Check duplicate username
+            cursor.execute("SELECT id FROM user WHERE username = %s", (username,))
+            if cursor.fetchone():
+                return {"error": "Username already exists."}
 
+            # Check duplicate email
+            cursor.execute("SELECT id FROM user WHERE email = %s", (email,))
+            if cursor.fetchone():
+                return {"error": "Email already registered."}
 
-def signup(username, password, full_name=None, email=None):
-    """
-    Register a new user.
-    Returns (True, user_id) or (False, error_message).
-    """
-    valid, error = validate_user(
-        {'username': username, 'password': password, 'email': email},
-        is_signup=True
-    )
-    if not valid:
-        return False, error
+            hashed = AuthController._hash_password(password)
+            cursor.execute(
+                """INSERT INTO user (username, password_hash, full_name, email)
+                   VALUES (%s, %s, %s, %s)""",
+                (username, hashed, full_name, email)
+            )
+            conn.commit()
+            return {"success": True, "user_id": cursor.lastrowid}
 
-    existing = get_user_by_username(username)
-    if existing:
-        return False, "Username already taken."
+        except Exception as e:
+            conn.rollback()
+            print(f"[AuthController] register error: {e}")
+            return {"error": str(e)}
+        finally:
+            close_connection(conn, cursor)
 
-    user_id = create_user(username, _hash_password(password), full_name, email)
-    if not user_id:
-        return False, "Could not create user. Please try again."
-
-    return True, user_id
-
-
-def logout():
-    global _current_user
-    _current_user = None
-
-
-def get_current_user():
-    return _current_user
-
-
-def require_login():
-    """Returns current user or raises RuntimeError if not logged in."""
-    if not _current_user:
-        raise RuntimeError("Not logged in.")
-    return _current_user
+    # ── HASH ──────────────────────────────────────────────────
+    @staticmethod
+    def _hash_password(password: str) -> str:
+        """SHA-256 hash — matches the existing hash in your DB."""
+        return hashlib.sha256(password.encode("utf-8")).hexdigest()

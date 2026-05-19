@@ -1,4 +1,4 @@
-from controllers.medicine_controller import controller_search_medicines
+from controllers.medicine_controller import MedicineController
 from models.inventory_model import get_all_categories
 
 
@@ -8,7 +8,7 @@ def controller_search(query="", category_id=None):
     Optionally filter by category_id.
     Returns list of matching medicine dicts.
     """
-    return controller_search_medicines(query.strip(), category_id)
+    return MedicineController.search_medicines(query.strip(), category_id)
 
 
 def controller_get_search_filters():

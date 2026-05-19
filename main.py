@@ -1,79 +1,138 @@
-from database.db_setup import setup_database
-from views.login_view import show_login
-from views.signup_view import show_signup
-from views.dashboard_view import show_dashboard
-from views.inventory_view import show_inventory, show_edit_medicine, show_delete_medicine
-from views.add_medicine_view import show_add_medicine
-from views.search_view import show_search
-from views.expiry_view import show_expiry, show_alerts
-from views.report_view import show_report, show_export
-from controllers.auth_controller import logout, get_current_user
+import sys
+from PyQt6.QtWidgets import QApplication
+from views.login_view import LoginView
+from views.signup_view import SignupView
+from views.dashboard_view import DashboardView
+from views.add_medicine_view import AddMedicineView
+from views.inventory_view import InventoryView
+from views.search_view import SearchView
+from views.expiry_view import ExpiryView
+from views.report_view import ReportView
 
 
-def auth_menu():
-    while True:
-        print("\n=== MediTrack ===")
-        print("1. Login")
-        print("2. Sign Up")
-        print("0. Exit")
-        choice = input("\nChoice: ").strip()
-        if choice == '1':
-            if show_login():
-                return True
-        elif choice == '2':
-            show_signup()
-        elif choice == '0':
-            print("Goodbye.")
-            return False
+class App:
+    def __init__(self):
+        self.qt_app = QApplication(sys.argv)
+        self.current_user_id  = None
+        self.current_username = None
+
+        self.login_win     = None
+        self.signup_win    = None
+        self.dashboard_win = None
+
+        self._show_login()
+
+    # ── SHOW LOGIN ────────────────────────────────────────────
+    def _show_login(self):
+        self._hide_all()
+        self.login_win = LoginView(
+            on_login=self._handle_login,
+            on_go_signup=self._show_signup
+        )
+        self.login_win.show()
+
+    # ── SHOW SIGNUP ───────────────────────────────────────────
+    def _show_signup(self):
+        self._hide_all()
+        self.signup_win = SignupView(
+            on_signup=self._handle_signup,
+            on_go_login=self._show_login
+        )
+        self.signup_win.show()
+
+    # ── SHOW DASHBOARD ────────────────────────────────────────
+    def _show_dashboard(self, username):
+        self._hide_all()
+        self.dashboard_win = DashboardView(
+            username=username,
+            on_navigate=self._handle_navigate,
+            on_logout=self._handle_logout
+        )
+        # Load real stats then show dashboard overview
+        self._navigate_dashboard()
+        self.dashboard_win.show()
+
+    # ── NAVIGATE ─────────────────────────────────────────────
+    def _handle_navigate(self, key):
+        if key == "dashboard":
+            self._navigate_dashboard()
+
+        elif key == "add":
+            self.dashboard_win.set_content(
+                AddMedicineView(
+                    user_id=self.current_user_id,
+                    on_success=self._navigate_dashboard
+                )
+            )
+
+        elif key == "inventory":
+            self.dashboard_win.set_content(
+                InventoryView(user_id=self.current_user_id)
+            )
+
+        elif key == "search":
+            self.dashboard_win.set_content(
+                SearchView(user_id=self.current_user_id)
+            )
+
+        elif key == "expiry":
+            self.dashboard_win.set_content(
+                ExpiryView(user_id=self.current_user_id)
+            )
+
+        elif key == "report":
+            self.dashboard_win.set_content(
+                ReportView(user_id=self.current_user_id)
+            )
+
         else:
-            print("Invalid choice.")
+            print(f"[Navigation] '{key}' not implemented.")
 
+    # ── DASHBOARD OVERVIEW ────────────────────────────────────
+    def _navigate_dashboard(self):
+        """Fetch fresh stats and rebuild the dashboard overview."""
+        if not self.dashboard_win:
+            return
+        from controllers.medicine_controller import MedicineController
+        stats = MedicineController.get_dashboard_stats()
+        self.dashboard_win.show_dashboard_content(stats)
+        self.dashboard_win.set_active_nav("dashboard")
 
-def main_menu():
-    while True:
-        user = get_current_user()
-        print(f"\n=== Main Menu [{user['username']}] ===")
-        print("1. Dashboard")
-        print("2. View Inventory")
-        print("3. Add Medicine")
-        print("4. Edit Medicine")
-        print("5. Delete Medicine")
-        print("6. Search Medicine")
-        print("7. Check Expiry")
-        print("8. Alerts")
-        print("9. Generate Report")
-        print("10. Export CSV")
-        print("0. Logout")
-
-        choice = input("\nChoice: ").strip()
-        if   choice == '1':  show_dashboard()
-        elif choice == '2':  show_inventory()
-        elif choice == '3':  show_add_medicine()
-        elif choice == '4':  show_edit_medicine()
-        elif choice == '5':  show_delete_medicine()
-        elif choice == '6':  show_search()
-        elif choice == '7':  show_expiry()
-        elif choice == '8':  show_alerts()
-        elif choice == '9':  show_report()
-        elif choice == '10': show_export()
-        elif choice == '0':
-            logout()
-            print("Logged out.")
-            break
+    # ── AUTH HANDLERS ─────────────────────────────────────────
+    def _handle_login(self, username, password):
+        from controllers.auth_controller import AuthController
+        result = AuthController.login(username, password)
+        if result.get("success"):
+            self.current_user_id  = result["user_id"]
+            self.current_username = result["username"]
+            self._show_dashboard(self.current_username)
         else:
-            print("Invalid choice.")
+            if self.login_win:
+                self.login_win.show_error(result.get("error", "Invalid credentials."))
 
+    def _handle_signup(self, full_name, username, email, password):
+        from controllers.auth_controller import AuthController
+        result = AuthController.register(full_name, username, email, password)
+        if result.get("success"):
+            return None
+        return {"error": result.get("error", "Registration failed.")}
 
-def main():
-    print("Initialising database...")
-    setup_database()
+    def _handle_logout(self):
+        self.current_user_id  = None
+        self.current_username = None
+        self._show_login()
 
-    while True:
-        logged_in = auth_menu()
-        if not logged_in:
-            break
-        main_menu()
+    # ── HIDE ALL ──────────────────────────────────────────────
+    def _hide_all(self):
+        for win in [self.login_win, self.signup_win, self.dashboard_win]:
+            if win:
+                win.hide()
+
+    # ── RUN ───────────────────────────────────────────────────
+    def run(self):
+        sys.exit(self.qt_app.exec())
 
 
 if __name__ == "__main__":
-    main()
+    app = App()
+    app.run()
